@@ -447,10 +447,69 @@ function buildAce(options, callback) {
             sanityCheck(options, callback);
         if (options.noconflict && !options.compress)
             buildTypes();
+        extractCss(options)
             
         if (callback) 
             return callback();
         console.log("Finished building " + getTargetDir(options));
+    }
+}
+
+function extractCss(options) {
+    var dir = BUILD_DIR + '/src-noconflict';
+    var filenames = fs.readdirSync(dir);
+    var css = "";
+    filenames.forEach(function(filename) {
+        var stat = fs.statSync(dir + "/" + filename);
+        if (stat.isDirectory()) return;
+        var value = fs.readFileSync(dir + "/" + filename, "utf8");
+            
+        var cssImports = detectCssImports(value);
+        
+        if (/theme-/.test(filename)) {
+            var themeCss = "";
+            for (var i in cssImports) {
+                themeCss += cssImports[i];
+            }
+            build.writeToFile({code: themeCss}, {
+                outputFolder: BUILD_DIR + "/theme",
+                outputFile: filename.replace(/^theme-|\.js$/g, "") + ".css"
+            }, function() {});
+        } else if (cssImports) {
+            css += "\n/*" + filename + "*/"
+            for (var i in cssImports) {
+                css += "\n" + cssImports[i];
+            }
+        }
+    });
+    
+    build.writeToFile({code: css}, {
+        outputFolder: BUILD_DIR,
+        outputFile: "ace.css"
+    }, function() {});
+    
+    function detectCssImports(code) {
+        code = code.replace(/^\s*\/\/.+|^\s*\/\*[\s\S]*?\*\//gm, "");
+
+        var stringRegex = /^("(?:[^"\\]|\\[\d\D])*"|'(?:[^'\\]|\\[\d\D])*'|)/
+        var importCssRegex = /\.importCssString\(\s*(?:([^,)"']+)|["'])/g;
+        
+        var match;
+        var cssImports;
+        while (match = importCssRegex.exec(code)) {
+             if (match[1]) {
+                var locationRegex = new RegExp("[^.]" + match[1] + /\s*=\s*['"]/.source)
+                match = locationRegex.exec(code);
+                if (!match) continue
+            }
+            var index = match.index + match[0].length - 1
+            if (cssImports && cssImports[index]) continue;
+            var cssString = stringRegex.exec(code.slice(index))[0];
+            if (!cssString) continue;
+            if (!cssImports) cssImports = {};
+            cssImports[index] = cssString.slice(1, -1).replace(/\\(.|\n)/g, "$1");
+        }
+        return cssImports;
     }
 }
 
@@ -466,7 +525,8 @@ function getLoadedFileList(options, callback, result) {
             if (!deps[p]) deps[p] = 1;
         });
     });
-    delete deps["ace/theme/textmate"];
+    if (options.projectType == "theme")
+        delete deps["ace/theme/textmate"];
     deps["ace/ace"] = 1;
     callback(Object.keys(deps));
 }
